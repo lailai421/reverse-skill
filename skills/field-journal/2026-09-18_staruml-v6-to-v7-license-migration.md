@@ -112,6 +112,43 @@ const { getDeviceId, remoteActivate, remoteDeactivate, remoteValidate } =
 | `subprocess.call` | `TypeError: unexpected keyword argument 'check'` | `call` 不接受 `check=`，只有 `run` 接受 |
 | 中文数字位数 | 309 个 9 → `Infinity` | 13 位即可，避免 UI 渲染成 "Infinity 天" |
 | PowerShell 无关 | 本项目纯 Python/Node | macOS 下无需 pwsh |
+| Windows `%LOCALAPPDATA%` 缺失 | 拼出相对路径，被 `os.path.exists` 相对 CWD 误判 | 追加候选前校验 `os.path.isabs()` |
+| Windows `npx` 是 `.cmd` | `subprocess.run(["npx",...])` 报 `FileNotFoundError` | 解析绝对路径 + `.cmd/.bat` 时 `shell=True` |
+| 跨平台脚本"想当然" | 以为文本处理就天然平台无关 | 逐项论证：路径拼接、可执行后缀、控制台编码都是耦合点 |
+| 审计工具用错场景 | 对已汉化目录审计得到 0.71% 的误导结论 | 加中文态反向统计，三态评定 ok/already/fail |
+
+## 跨平台考察结论（后补）
+
+原以为"核心逻辑平台无关"就等同于"Windows 可用"，实测核查后发现不是。
+
+**真正平台无关的部分**（占绝大多数）
+  - app.asar 本身是 Win/Mac 通用包
+  - 语言包替换、源码补丁：纯文本处理
+  - v7 激活：AES-256-GCM 由 Node.js 完成，与宿主平台无关
+  - userData 路径用 %APPDATA%
+
+**Windows 上真实存在的 4 处缺陷**
+  1. `%LOCALAPPDATA%` 缺失时 `os.path.join("", ...)` 生成**相对路径**，
+     被 `os.path.exists()` 相对 CWD 误判 → 必须校验 `isabs()`
+  2. Windows 的 `npx` 是 `.cmd` 脚本。CPython 3.7+ 已移除对 `.bat`/`.cmd`
+     的自动 `cmd.exe` 包裹（已核对 3.14 `subprocess.py` 源码确认），
+     直接 `subprocess.run(["npx", ...])` 会 `FileNotFoundError`
+  3. `node` 需按 `.exe` / `.cmd` 差异探测
+  4. 缺平台能力自检，失败时"静默不可用"
+
+**可复用结论**
+  - **"平台无关"要逐项论证，不能凭直觉**。当时的直觉是"文本处理嘛，肯定通用"，
+    但路径拼接、可执行文件后缀、控制台编码都是隐藏的平台耦合点
+  - **控制台编码要实测**：用 `PYTHONIOENCODING=gbk:strict` 模拟 Windows 控制台，
+    确认中文输出不报错（实测 GBK 覆盖全部用到的字符，0 错误）
+  - **统一命令调用层**是跨平台脚本的必要抽象：
+    `resolve_executable()` 解析绝对路径 + 判断是否需 shell，
+    `run_tool()` 统一入口，避免每处 `subprocess.run` 各写各的
+  - **审计类工具要防"用错场景"**：对已汉化目录跑覆盖率审计会得出 0.71% 的
+    误导性结论。加中文态反向统计 + 三态评定（ok/already/fail），
+    already 时明确提示而非报错
+  - **诚实标注验证边界**：macOS 实测通过 ≠ Windows 可用。
+    在文档里明确写"Windows 未实测，已做代码级保障"，比含糊说"都支持"更有价值
 
 ## 工具链发现
 
